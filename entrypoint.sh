@@ -25,7 +25,7 @@ if [ ! -f "$INIT_DONE" ]; then
     (
         # Wait for Stalwart to accept connections
         for i in $(seq 1 30); do
-            if curl -sf -o /dev/null http://localhost:8080/ 2>/dev/null; then
+            if curl -sf -o /dev/null http://localhost:8081/ 2>/dev/null; then
                 break
             fi
             sleep 1
@@ -34,11 +34,15 @@ if [ ! -f "$INIT_DONE" ]; then
         curl -sf -u "admin:$ADMIN_SECRET" \
             -H "Content-Type: application/json" \
             -d '{"type":"role","name":"user"}' \
-            http://localhost:8080/api/principal > /dev/null 2>&1 || true
+            http://localhost:8081/api/principal > /dev/null 2>&1 || true
 
         touch "$INIT_DONE"
         echo "First-boot init complete: 'user' role created"
     ) &
 fi
 
+# Start Caddy (CORS proxy on :8080 -> :8081) in background
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+
+# Start Stalwart (HTTP on :8081, SMTP on :25) in foreground
 exec /usr/local/bin/stalwart --config /opt/stalwart/etc/config.toml

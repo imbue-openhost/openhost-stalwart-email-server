@@ -9,7 +9,7 @@ bind = ["[::]:25"]
 protocol = "smtp"
 
 [server.listener."http"]
-bind = ["[::]:8080"]
+bind = ["[::]:8081"]
 protocol = "http"
 
 [storage]
