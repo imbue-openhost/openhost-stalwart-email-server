@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head><title>Signing in...</title>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f5f8}p{color:#64748b}</style>
+</head>
+<body>
+<p>Signing in...</p>
+<script>
+(async function(){
+  try {
+    // Step 1: Get an auth code from Stalwart (Caddy injects admin Basic auth)
+    var r1=await fetch("/api/oauth",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({type:"code",client_id:"webadmin",redirect_uri:"stalwart://auth"})
+    });
+    if(!r1.ok) throw new Error("/api/oauth: "+r1.status);
+    var d1=await r1.json();
+    var code=d1.data.code;
+    var permissions=d1.data.permissions;
+    var isEnterprise=d1.data.isEnterprise||false;
+
+    // Step 2: Exchange code for access + refresh tokens
+    var r2=await fetch("/auth/token",{
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=UTF-8"},
+      body:"grant_type=authorization_code&client_id=webadmin&code="+encodeURIComponent(code)+"&redirect_uri=stalwart%3A%2F%2Fauth"
+    });
+    if(!r2.ok) throw new Error("/auth/token: "+r2.status);
+    var d2=await r2.json();
+
+    // Step 3: Set sessionStorage with the webadmin state
+    sessionStorage.setItem("webadmin_state",JSON.stringify({
+      base_url:"",
+      access_token:d2.access_token,
+      refresh_token:d2.refresh_token,
+      username:"admin",
+      is_valid:true,
+      is_enterprise:isEnterprise,
+      permissions:permissions
+    }));
+
+    // Step 4: Redirect to admin dashboard
+    window.location.replace("/manage/directory/accounts");
+  } catch(e) {
+    document.querySelector("p").textContent="Login failed: "+e.message;
+  }
+})();
+</script>
+</body>
+</html>

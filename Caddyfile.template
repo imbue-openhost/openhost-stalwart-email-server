@@ -9,6 +9,20 @@
 	@options method OPTIONS
 	respond @options 204
 
+	# Redirect / to auto-login if no webadmin session
+	@root_no_session {
+		path /
+		not header Cookie *webadmin_*
+	}
+	redir @root_no_session /owner-login temporary
+
+	# Serve the auto-login page
+	handle /owner-login {
+		root * /opt/stalwart/static
+		rewrite * /owner-login.html
+		file_server
+	}
+
 	# Owner on JMAP paths -> inject email user auth
 	@owner_jmap {
 		header X-OpenHost-Is-Owner true
@@ -19,7 +33,7 @@
 	# Owner on all other paths -> inject admin auth
 	@owner_admin {
 		header X-OpenHost-Is-Owner true
-		not path /jmap/* /.well-known/jmap
+		not path /jmap/* /.well-known/jmap /owner-login
 	}
 	request_header @owner_admin Authorization "Basic {{ADMIN_BASIC_AUTH}}"
 

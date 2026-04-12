@@ -6,6 +6,7 @@ RUN apt-get update && \
 
 COPY stalwart.toml /opt/stalwart/etc/config.toml
 COPY Caddyfile.template /etc/caddy/Caddyfile.template
+COPY owner-login.html /opt/stalwart/static/owner-login.html
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
