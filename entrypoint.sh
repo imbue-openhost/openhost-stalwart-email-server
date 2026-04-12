@@ -3,6 +3,8 @@ set -e
 
 export STALWART_DATA_DIR="${OPENHOST_APP_DATA_DIR:-/opt/stalwart/data}"
 export MAIL_HOSTNAME="${MAIL_HOSTNAME:-localhost}"
+OWNER_EMAIL_USER="${OWNER_EMAIL_USER:-owner}"
+OWNER_EMAIL_DOMAIN="${OWNER_EMAIL_DOMAIN:-localhost}"
 
 mkdir -p "$STALWART_DATA_DIR"
 
@@ -19,16 +21,30 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 export ADMIN_SECRET=$(cat "$SECRET_FILE")
 
-# Template the Caddyfile with the admin Basic auth token
+# Generate owner email password on first run
+OWNER_SECRET_FILE="$STALWART_DATA_DIR/.owner_email_secret"
+if [ ! -f "$OWNER_SECRET_FILE" ]; then
+    OWNER_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
+    echo "$OWNER_SECRET" > "$OWNER_SECRET_FILE"
+    chmod 600 "$OWNER_SECRET_FILE"
+    echo "========================================"
+    echo " Owner email: $OWNER_EMAIL_USER@$OWNER_EMAIL_DOMAIN"
+    echo " Owner pass:  $OWNER_SECRET"
+    echo "========================================"
+fi
+OWNER_SECRET=$(cat "$OWNER_SECRET_FILE")
+
+# Template the Caddyfile with auth tokens
 ADMIN_BASIC_AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64)
-sed "s|{{ADMIN_BASIC_AUTH}}|$ADMIN_BASIC_AUTH|g" \
+USER_BASIC_AUTH=$(printf '%s:%s' "$OWNER_EMAIL_USER" "$OWNER_SECRET" | base64)
+sed -e "s|{{ADMIN_BASIC_AUTH}}|$ADMIN_BASIC_AUTH|g" \
+    -e "s|{{USER_BASIC_AUTH}}|$USER_BASIC_AUTH|g" \
     /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile
 
-# First-boot: create "user" role so new accounts get JMAP access
+# First-boot: create role, domain, and owner email account
 INIT_DONE="$STALWART_DATA_DIR/.initialized"
 if [ ! -f "$INIT_DONE" ]; then
     (
-        # Wait for Stalwart to accept connections
         for i in $(seq 1 30); do
             if curl -sf -o /dev/null http://localhost:8081/ 2>/dev/null; then
                 break
@@ -36,13 +52,25 @@ if [ ! -f "$INIT_DONE" ]; then
             sleep 1
         done
 
-        curl -sf -u "admin:$ADMIN_SECRET" \
-            -H "Content-Type: application/json" \
+        AUTH="admin:$ADMIN_SECRET"
+
+        # Create user role
+        curl -sf -u "$AUTH" -H "Content-Type: application/json" \
             -d '{"type":"role","name":"user"}' \
             http://localhost:8081/api/principal > /dev/null 2>&1 || true
 
+        # Create domain
+        curl -sf -u "$AUTH" -H "Content-Type: application/json" \
+            -d "{\"type\":\"domain\",\"name\":\"$OWNER_EMAIL_DOMAIN\"}" \
+            http://localhost:8081/api/principal > /dev/null 2>&1 || true
+
+        # Create owner email account
+        curl -sf -u "$AUTH" -H "Content-Type: application/json" \
+            -d "{\"type\":\"individual\",\"name\":\"$OWNER_EMAIL_USER\",\"secrets\":[\"$OWNER_SECRET\"],\"emails\":[\"$OWNER_EMAIL_USER@$OWNER_EMAIL_DOMAIN\"],\"roles\":[\"user\"]}" \
+            http://localhost:8081/api/principal > /dev/null 2>&1 || true
+
         touch "$INIT_DONE"
-        echo "First-boot init complete: 'user' role created"
+        echo "First-boot init complete: role, domain, and owner account created"
     ) &
 fi
 
