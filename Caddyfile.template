@@ -9,5 +9,9 @@
 	@options method OPTIONS
 	respond @options 204
 
+	# Inject admin auth when OpenHost owner is detected
+	@owner header X-OpenHost-Is-Owner true
+	request_header @owner Authorization "Basic {{ADMIN_BASIC_AUTH}}"
+
 	reverse_proxy localhost:8081
 }

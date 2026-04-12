@@ -8,7 +8,7 @@ image = "Dockerfile"
 port = 8080
 
 [routing]
-public_paths = ["/"]
+public_paths = ["/jmap/", "/.well-known/jmap"]
 
 [resources]
 memory_mb = 256

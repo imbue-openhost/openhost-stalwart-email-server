@@ -19,6 +19,11 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 export ADMIN_SECRET=$(cat "$SECRET_FILE")
 
+# Template the Caddyfile with the admin Basic auth token
+ADMIN_BASIC_AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64)
+sed "s|{{ADMIN_BASIC_AUTH}}|$ADMIN_BASIC_AUTH|g" \
+    /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile
+
 # First-boot: create "user" role so new accounts get JMAP access
 INIT_DONE="$STALWART_DATA_DIR/.initialized"
 if [ ! -f "$INIT_DONE" ]; then
@@ -41,7 +46,7 @@ if [ ! -f "$INIT_DONE" ]; then
     ) &
 fi
 
-# Start Caddy (CORS proxy on :8080 -> :8081) in background
+# Start Caddy (CORS + owner-auth proxy on :8080 -> :8081) in background
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 
 # Start Stalwart (HTTP on :8081, SMTP on :25) in foreground

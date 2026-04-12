@@ -5,7 +5,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY stalwart.toml /opt/stalwart/etc/config.toml
-COPY Caddyfile /etc/caddy/Caddyfile
+COPY Caddyfile.template /etc/caddy/Caddyfile.template
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
