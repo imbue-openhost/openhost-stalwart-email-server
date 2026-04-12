@@ -25,20 +25,16 @@ if [ ! -f "$INIT_DONE" ]; then
     (
         # Wait for Stalwart to accept connections
         for i in $(seq 1 30); do
-            if wget -q -O /dev/null http://localhost:8080/ 2>/dev/null; then
+            if curl -sf -o /dev/null http://localhost:8080/ 2>/dev/null; then
                 break
             fi
             sleep 1
         done
 
-        AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64)
-
-        # Create "user" role
-        wget -q -O /dev/null \
-            --header="Content-Type: application/json" \
-            --header="Authorization: Basic $AUTH" \
-            --post-data='{"type":"role","name":"user"}' \
-            http://localhost:8080/api/principal 2>/dev/null || true
+        curl -sf -u "admin:$ADMIN_SECRET" \
+            -H "Content-Type: application/json" \
+            -d '{"type":"role","name":"user"}' \
+            http://localhost:8080/api/principal > /dev/null 2>&1 || true
 
         touch "$INIT_DONE"
         echo "First-boot init complete: 'user' role created"
