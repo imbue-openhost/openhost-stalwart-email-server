@@ -1,6 +1,9 @@
 [server]
 hostname = "%{env:MAIL_HOSTNAME}%"
 
+[server.http]
+permissive-cors = true
+
 [server.listener."smtp"]
 bind = ["[::]:25"]
 protocol = "smtp"
