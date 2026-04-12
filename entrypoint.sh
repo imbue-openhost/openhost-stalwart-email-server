@@ -19,4 +19,30 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 export ADMIN_SECRET=$(cat "$SECRET_FILE")
 
+# First-boot: create "user" role so new accounts get JMAP access
+INIT_DONE="$STALWART_DATA_DIR/.initialized"
+if [ ! -f "$INIT_DONE" ]; then
+    (
+        # Wait for Stalwart to accept connections
+        for i in $(seq 1 30); do
+            if wget -q -O /dev/null http://localhost:8080/ 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+
+        AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64)
+
+        # Create "user" role
+        wget -q -O /dev/null \
+            --header="Content-Type: application/json" \
+            --header="Authorization: Basic $AUTH" \
+            --post-data='{"type":"role","name":"user"}' \
+            http://localhost:8080/api/principal 2>/dev/null || true
+
+        touch "$INIT_DONE"
+        echo "First-boot init complete: 'user' role created"
+    ) &
+fi
+
 exec /usr/local/bin/stalwart --config /opt/stalwart/etc/config.toml
