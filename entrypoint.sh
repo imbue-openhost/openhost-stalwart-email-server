@@ -21,18 +21,9 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 export ADMIN_SECRET=$(cat "$SECRET_FILE")
 
-# Generate owner email password on first run
-OWNER_SECRET_FILE="$STALWART_DATA_DIR/.owner_email_secret"
-if [ ! -f "$OWNER_SECRET_FILE" ]; then
-    OWNER_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
-    echo "$OWNER_SECRET" > "$OWNER_SECRET_FILE"
-    chmod 600 "$OWNER_SECRET_FILE"
-    echo "========================================"
-    echo " Owner email: $OWNER_EMAIL_USER@$OWNER_EMAIL_DOMAIN"
-    echo " Owner pass:  $OWNER_SECRET"
-    echo "========================================"
-fi
-OWNER_SECRET=$(cat "$OWNER_SECRET_FILE")
+# Fixed owner email password (both email server and webmail share this;
+# access is gated by OpenHost owner auth, not this password)
+OWNER_SECRET="${OWNER_EMAIL_PASSWORD:-openhost-owner-email}"
 
 # Template the Caddyfile with auth tokens
 ADMIN_BASIC_AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64)
