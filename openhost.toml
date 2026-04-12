@@ -1,0 +1,21 @@
+[app]
+name = "email"
+version = "0.1.0"
+description = "Stalwart mail server - SMTP + JMAP with SQLite"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[routing]
+public_paths = ["/"]
+
+[resources]
+memory_mb = 256
+cpu_millicores = 200
+
+[data]
+app_data = true
+
+# [ports]
+# smtp = 25
