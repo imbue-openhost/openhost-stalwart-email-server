@@ -23,16 +23,18 @@
 		file_server
 	}
 
-	# Owner on JMAP paths -> inject email user auth
+	# Owner on JMAP paths without existing auth -> inject email user auth
 	@owner_jmap {
 		header X-OpenHost-Is-Owner true
+		not header Authorization *
 		path /jmap/* /.well-known/jmap
 	}
 	request_header @owner_jmap Authorization "Basic {{USER_BASIC_AUTH}}"
 
-	# Owner on all other paths -> inject admin auth
+	# Owner on other paths without existing auth -> inject admin auth
 	@owner_admin {
 		header X-OpenHost-Is-Owner true
+		not header Authorization *
 		not path /jmap/* /.well-known/jmap /owner-login
 	}
 	request_header @owner_admin Authorization "Basic {{ADMIN_BASIC_AUTH}}"
