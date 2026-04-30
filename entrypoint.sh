@@ -40,6 +40,10 @@ sed -e "s|{{ADMIN_BASIC_AUTH}}|$ADMIN_BASIC_AUTH|g" \
     -e "s|{{USER_BASIC_AUTH}}|$USER_BASIC_AUTH|g" \
     /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile
 
+# Template the owner-login page with admin secret (page is only served to authenticated owners)
+sed -e "s|{{ADMIN_SECRET}}|$ADMIN_SECRET|g" \
+    /opt/stalwart/static/owner-login.html > /opt/stalwart/static/owner-login-rendered.html
+
 # First-boot: start in recovery mode, apply initial config via CLI
 INIT_DONE="$DATA_DIR/.initialized"
 if [ ! -f "$INIT_DONE" ]; then

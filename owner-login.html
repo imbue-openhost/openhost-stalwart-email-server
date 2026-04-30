@@ -15,7 +15,7 @@
       body: JSON.stringify({
         type: "authCode",
         accountName: "admin",
-        accountSecret: "",
+        accountSecret: "{{ADMIN_SECRET}}",
         clientId: "stalwart-webui",
         redirectUri: "stalwart://auth"
       })

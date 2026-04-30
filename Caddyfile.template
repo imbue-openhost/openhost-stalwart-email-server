@@ -16,10 +16,10 @@
 	}
 	redir @root_no_session /owner-login temporary
 
-	# Serve the auto-login page
+	# Serve the auto-login page (rendered with admin secret at startup)
 	handle /owner-login {
 		root * /opt/stalwart/static
-		rewrite * /owner-login.html
+		rewrite * /owner-login-rendered.html
 		file_server
 	}
 
