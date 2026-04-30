@@ -49,7 +49,7 @@ if [ ! -f "$INIT_DONE" ]; then
 
     # Wait for recovery mode listener on port 8080
     for i in $(seq 1 30); do
-        if curl -sf -o /dev/null http://localhost:8080/ 2>/dev/null; then
+        if curl -s -o /dev/null -w '' http://localhost:8080/ 2>/dev/null; then
             break
         fi
         sleep 1
