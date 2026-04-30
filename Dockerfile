@@ -9,13 +9,11 @@ RUN apt-get update && \
       https://github.com/stalwartlabs/cli/releases/latest/download/stalwart-cli-installer.sh | sh && \
     cp /root/.cargo/bin/stalwart-cli /usr/local/bin/stalwart-cli
 
-RUN mkdir -p /etc/stalwart /etc/caddy /opt/stalwart/static && \
-    chown -R stalwart:stalwart /etc/stalwart /etc/caddy /opt/stalwart/static
-USER stalwart
+RUN mkdir -p /etc/stalwart /etc/caddy /opt/stalwart/static
 
-COPY --chown=stalwart:stalwart Caddyfile.template /etc/caddy/Caddyfile.template
-COPY --chown=stalwart:stalwart owner-login.html /opt/stalwart/static/owner-login.html
-COPY --chown=stalwart:stalwart entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY Caddyfile.template /etc/caddy/Caddyfile.template
+COPY owner-login.html /opt/stalwart/static/owner-login.html
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 8080 25
