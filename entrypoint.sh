@@ -4,6 +4,9 @@ set -e
 DEFAULT_DOMAIN="${OPENHOST_ZONE_DOMAIN:-localhost}"
 APP_HOSTNAME="${OPENHOST_APP_NAME:+${OPENHOST_APP_NAME}.${DEFAULT_DOMAIN}}"
 export MAIL_HOSTNAME="${MAIL_HOSTNAME:-${APP_HOSTNAME:-$DEFAULT_DOMAIN}}"
+# Stable hostname for cluster node ID — without this, every container restart
+# creates a new node entry (since podman gives each container a random hostname)
+export STALWART_HOSTNAME="${APP_HOSTNAME:-$MAIL_HOSTNAME}"
 OWNER_EMAIL_USER="${OWNER_EMAIL_USER:-owner}"
 OWNER_EMAIL_DOMAIN="${OWNER_EMAIL_DOMAIN:-$DEFAULT_DOMAIN}"
 DATA_DIR="${OPENHOST_APP_DATA_DIR:-/var/lib/stalwart}"
