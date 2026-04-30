@@ -35,7 +35,7 @@
 	@owner_admin {
 		header X-OpenHost-Is-Owner true
 		not header Authorization *
-		not path /jmap/* /.well-known/jmap /owner-login
+		not path /jmap/* /.well-known/jmap /owner-login /api/* /auth/*
 	}
 	request_header @owner_admin Authorization "Basic {{ADMIN_BASIC_AUTH}}"
 
