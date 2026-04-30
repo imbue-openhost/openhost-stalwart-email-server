@@ -1,7 +1,7 @@
 [app]
-name = "email"
+name = "stalwart-email-server"
 version = "0.1.0"
-description = "Stalwart mail server - SMTP + JMAP with SQLite"
+description = "Stalwart v0.16 mail server - SMTP + JMAP with SQLite"
 
 [runtime.container]
 image = "Dockerfile"
