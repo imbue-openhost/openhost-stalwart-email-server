@@ -86,6 +86,14 @@ PLAN
     unset STALWART_RECOVERY_MODE
 fi
 
+# Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
+# permissions, injects owner Basic auth, forwards to Stalwart on :8081).
+USER_BASIC_AUTH="$USER_BASIC_AUTH" \
+STALWART_UPSTREAM="http://127.0.0.1:8081" \
+    /opt/jmap_proxy/.venv/bin/uvicorn jmap_proxy.main:app \
+    --host 127.0.0.1 --port 8082 \
+    --no-access-log &
+
 # Start Caddy (CORS + owner-auth proxy on :8080 -> :8081) in background
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 

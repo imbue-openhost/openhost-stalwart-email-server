@@ -9,6 +9,13 @@
 	@options method OPTIONS
 	respond @options 204
 
+	# v2 service entry: forward to the JMAP proxy sidecar, which validates
+	# X-OpenHost-Permissions and injects owner Basic auth before talking to
+	# Stalwart. handle_path strips the /_jmap_service prefix.
+	handle_path /_jmap_service/* {
+		reverse_proxy 127.0.0.1:8082
+	}
+
 	# Redirect / to auto-login if no webadmin session
 	@root_no_session {
 		path /

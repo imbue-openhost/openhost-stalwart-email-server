@@ -1,0 +1,3 @@
+[service]
+name = "jmap"
+description = "JMAP mail access (RFC 8620) for the owner's mailbox"
