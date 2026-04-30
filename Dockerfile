@@ -3,7 +3,7 @@ FROM stalwartlabs/stalwart:v0.16.2
 
 USER root
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl caddy && \
+    apt-get install -y --no-install-recommends curl caddy xz-utils && \
     rm -rf /var/lib/apt/lists/* && \
     curl --proto '=https' --tlsv1.2 -LsSf \
       https://github.com/stalwartlabs/cli/releases/latest/download/stalwart-cli-installer.sh | sh && \
