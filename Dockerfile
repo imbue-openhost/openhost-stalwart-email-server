@@ -6,11 +6,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 USER stalwart
 
-COPY stalwart.toml /opt/stalwart/etc/config.toml
-COPY Caddyfile.template /etc/caddy/Caddyfile.template
-COPY owner-login.html /opt/stalwart/static/owner-login.html
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN ls -lah /usr/local/bin/
+COPY --chown=stalwart:stalwart stalwart.toml /opt/stalwart/etc/config.toml
+COPY --chown=stalwart:stalwart Caddyfile.template /etc/caddy/Caddyfile.template
+COPY --chown=stalwart:stalwart owner-login.html /opt/stalwart/static/owner-login.html
+COPY --chown=stalwart:stalwart entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 8080 25
