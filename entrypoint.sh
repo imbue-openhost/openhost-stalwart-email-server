@@ -61,10 +61,10 @@ if [ ! -f "$INIT_DONE" ]; then
     export STALWART_PASSWORD="$ADMIN_SECRET"
 
     # Apply initial plan: domain, settings, listeners, owner account
-    stalwart-cli apply --continue-on-error --file /dev/stdin <<PLAN
+    stalwart-cli apply --file /dev/stdin <<PLAN
 {"@type":"create","object":"Domain","value":{"dom-a":{"name":"$OWNER_EMAIL_DOMAIN"}}}
 {"@type":"update","object":"SystemSettings","value":{"defaultDomainId":"#dom-a","defaultHostname":"$MAIL_HOSTNAME"}}
-{"@type":"create","object":"NetworkListener","value":{"http-listener":{"bind":["0.0.0.0:8081"],"protocol":"http","useTls":false},"smtp-listener":{"bind":["0.0.0.0:25"],"protocol":"smtp","useTls":false}}}
+{"@type":"create","object":"NetworkListener","value":{"http-listener":{"name":"http","bind":{"0.0.0.0:8081":true},"protocol":"http","useTls":false},"smtp-listener":{"name":"smtp","bind":{"0.0.0.0:25":true},"protocol":"smtp","useTls":false}}}
 {"@type":"create","object":"Account","value":{"owner-acct":{"@type":"User","name":"$OWNER_EMAIL_USER","domainId":"#dom-a","credentials":{"0":{"@type":"Password","secret":"$OWNER_SECRET"}}}}}
 PLAN
 
