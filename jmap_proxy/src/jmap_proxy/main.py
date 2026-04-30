@@ -154,7 +154,7 @@ async def _proxy_http(scope: Scope, receive: Receive, send: Send) -> None:
             if not msg.get("more_body", False):
                 return
 
-    client = httpx.AsyncClient(base_url=UPSTREAM_BASE, timeout=None)
+    client = httpx.AsyncClient(base_url=UPSTREAM_BASE, timeout=None, follow_redirects=True)
     try:
         upstream_req = client.build_request(
             method=scope["method"],
