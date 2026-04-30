@@ -3,9 +3,11 @@ FROM stalwartlabs/stalwart:v0.16.2
 
 USER root
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl caddy npm && \
-    npm install -g @stalwartlabs/cli && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends curl caddy && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl --proto '=https' --tlsv1.2 -LsSf \
+      https://github.com/stalwartlabs/cli/releases/latest/download/stalwart-cli-installer.sh | sh && \
+    cp /root/.cargo/bin/stalwart-cli /usr/local/bin/stalwart-cli
 
 RUN mkdir -p /etc/stalwart /etc/caddy /opt/stalwart/static && \
     chown -R stalwart:stalwart /etc/stalwart /etc/caddy /opt/stalwart/static
