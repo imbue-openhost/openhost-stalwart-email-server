@@ -13,6 +13,7 @@ DATA_DIR="${OPENHOST_APP_DATA_DIR:-/var/lib/stalwart}"
 CONFIG_DIR="/etc/stalwart"
 
 mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR/logs"
 
 # Generate config.json — path is a directory Stalwart will create for its SQLite files
 cat > "$CONFIG_DIR/config.json" <<EOF
@@ -87,6 +88,22 @@ fi
 
 # Start Caddy (CORS + owner-auth proxy on :8080 -> :8081) in background
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+
+# Reconcile Log tracer path — Stalwart's default points to ephemeral /var/log/stalwart;
+# repoint it under $DATA_DIR so logs persist across container restarts. Idempotent.
+(
+    export STALWART_URL="http://localhost:8081"
+    export STALWART_USER="admin"
+    export STALWART_PASSWORD="$ADMIN_SECRET"
+    for i in $(seq 1 60); do
+        sleep 1
+        stalwart-cli query Tracer >/dev/null 2>&1 && break
+    done
+    LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
+    if [ -n "$LOG_ID" ]; then
+        stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
+    fi
+) &
 
 # Start Stalwart normally in foreground
 exec /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json"
