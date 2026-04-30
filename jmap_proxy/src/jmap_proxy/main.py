@@ -87,7 +87,7 @@ def _lookup_header(scope_headers: list[tuple[bytes, bytes]], name: bytes) -> byt
 
 
 def _map_path(path: str) -> str:
-    if path == "/.well-known/jmap":
+    if path.rstrip("/") == "/.well-known/jmap":
         return path
     if not path.startswith("/"):
         path = "/" + path
