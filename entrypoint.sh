@@ -106,4 +106,5 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 ) &
 
 # Start Stalwart normally in foreground
+echo "STALWART_HOSTNAME=$STALWART_HOSTNAME"
 exec /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json"
