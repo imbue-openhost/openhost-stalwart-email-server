@@ -5,14 +5,13 @@ export MAIL_HOSTNAME="${MAIL_HOSTNAME:-localhost}"
 OWNER_EMAIL_USER="${OWNER_EMAIL_USER:-owner}"
 OWNER_EMAIL_DOMAIN="${OWNER_EMAIL_DOMAIN:-localhost}"
 DATA_DIR="${OPENHOST_APP_DATA_DIR:-/var/lib/stalwart}"
-STALWART_DB_DIR="$DATA_DIR/db"
 CONFIG_DIR="/etc/stalwart"
 
-mkdir -p "$DATA_DIR" "$STALWART_DB_DIR"
+mkdir -p "$DATA_DIR"
 
-# Generate config.json pointing at a subdirectory for Stalwart's database
+# Generate config.json — path is a directory Stalwart will create for its SQLite files
 cat > "$CONFIG_DIR/config.json" <<EOF
-{"@type":"Sqlite","path":"$STALWART_DB_DIR"}
+{"@type":"Sqlite","path":"$DATA_DIR/db"}
 EOF
 
 # Generate admin secret on first run
