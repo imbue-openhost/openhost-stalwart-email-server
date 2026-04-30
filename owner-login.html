@@ -8,73 +8,63 @@
 <script>
 (async function(){
   try {
-    // Step 1: Get an auth code (Caddy injects admin Basic auth for owner requests)
+    var ADMIN_SECRET = "{{ADMIN_SECRET}}";
+    var CLIENT_ID = "stalwart-webui";
+    var CALLBACK_URL = window.location.origin + "/admin/oauth/callback";
+
+    // Generate PKCE code verifier (random 64-char string)
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    var verifier = "";
+    var arr = new Uint8Array(64);
+    crypto.getRandomValues(arr);
+    for (var i = 0; i < 64; i++) verifier += chars[arr[i] % chars.length];
+
+    // Compute S256 code challenge
+    var encoder = new TextEncoder();
+    var digest = await crypto.subtle.digest("SHA-256", encoder.encode(verifier));
+    var challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    // Generate state parameter
+    var stateArr = new Uint8Array(16);
+    crypto.getRandomValues(stateArr);
+    var state = Array.from(stateArr, b => b.toString(16).padStart(2, "0")).join("");
+
+    // Get auth code with PKCE challenge
     var r1 = await fetch("/api/auth", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         type: "authCode",
         accountName: "admin",
-        accountSecret: "{{ADMIN_SECRET}}",
-        clientId: "stalwart-webui",
-        redirectUri: "stalwart://auth"
+        accountSecret: ADMIN_SECRET,
+        clientId: CLIENT_ID,
+        redirectUri: CALLBACK_URL,
+        codeChallenge: challenge,
+        codeChallengeMethod: "S256",
+        state: state
       })
     });
     if (!r1.ok) throw new Error("/api/auth: " + r1.status);
     var d1 = await r1.json();
-    if (d1.type !== "authenticated") throw new Error("auth response: " + d1.type);
+    if (d1.type !== "authenticated") throw new Error("auth: " + d1.type);
 
-    // Step 2: Exchange code for tokens
-    var r2 = await fetch("/auth/token", {
-      method: "POST",
-      headers: {"Content-Type": "application/x-www-form-urlencoded"},
-      body: "grant_type=authorization_code&client_id=stalwart-webui&code="
-        + encodeURIComponent(d1.client_code)
-        + "&redirect_uri=stalwart%3A%2F%2Fauth"
-    });
-    if (!r2.ok) throw new Error("/auth/token: " + r2.status);
-    var tokens = await r2.json();
+    // Fetch OIDC config to get token_endpoint
+    var r2 = await fetch("/.well-known/openid-configuration");
+    var oidc = await r2.json();
 
-    // Step 3: Fetch JMAP session to populate accounts
-    var r3 = await fetch("/jmap/session", {
-      headers: {"Authorization": "Bearer " + tokens.access_token}
-    });
-    if (!r3.ok) throw new Error("/jmap/session: " + r3.status);
-    var session = await r3.json();
-
-    // Step 4: Build account map for the Zustand store
-    var accounts = {};
-    var primaryId = null;
-    for (var id in session.accounts) {
-      accounts[id] = {name: session.accounts[id].name, isPersonal: session.accounts[id].isPersonal};
-      if (session.accounts[id].isPersonal) primaryId = id;
-    }
-    if (!primaryId && session.primaryAccounts) {
-      primaryId = session.primaryAccounts["urn:ietf:params:jmap:mail"] || Object.values(session.primaryAccounts)[0];
+    // Set PKCE state in sessionStorage for the WebUI's callback handler
+    var prefix = "stalwart-oauth-";
+    sessionStorage.setItem(prefix + "code_verifier", verifier);
+    sessionStorage.setItem(prefix + "token_endpoint", oidc.token_endpoint);
+    sessionStorage.setItem(prefix + "state", state);
+    sessionStorage.setItem(prefix + "return_url", "/");
+    if (oidc.end_session_endpoint) {
+      sessionStorage.setItem(prefix + "end_session_endpoint", oidc.end_session_endpoint);
     }
 
-    var coreCapabilities = session.capabilities["urn:ietf:params:jmap:core"] || {};
-
-    // Step 5: Write Zustand persist state to localStorage
-    localStorage.setItem("stalwart-auth", JSON.stringify({
-      state: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        tokenExpiresAt: Date.now() + tokens.expires_in * 1000,
-        tokenEndpoint: session.apiUrl.replace(/\/jmap\/$/, "/auth/token"),
-        endSessionEndpoint: null,
-        accounts: accounts,
-        primaryAccountId: primaryId,
-        activeAccountId: primaryId,
-        apiUrl: session.apiUrl,
-        maxObjectsInGet: coreCapabilities.maxObjectsInGet || 500,
-        maxObjectsInSet: coreCapabilities.maxObjectsInSet || 500
-      },
-      version: 0
-    }));
-
-    // Step 6: Redirect to admin dashboard
-    window.location.replace("/admin/");
+    // Redirect to WebUI's OAuth callback — it will exchange code for tokens
+    window.location.replace(CALLBACK_URL + "?code=" + encodeURIComponent(d1.client_code) + "&state=" + state);
   } catch(e) {
     document.querySelector("p").textContent = "Login failed: " + e.message;
   }
