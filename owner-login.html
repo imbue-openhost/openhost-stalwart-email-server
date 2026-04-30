@@ -8,42 +8,75 @@
 <script>
 (async function(){
   try {
-    // Step 1: Get an auth code from Stalwart (Caddy injects admin Basic auth)
-    var r1=await fetch("/api/oauth",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({type:"code",client_id:"webadmin",redirect_uri:"stalwart://auth"})
+    // Step 1: Get an auth code (Caddy injects admin Basic auth for owner requests)
+    var r1 = await fetch("/api/auth", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        type: "authCode",
+        accountName: "admin",
+        accountSecret: "",
+        clientId: "stalwart-webui",
+        redirectUri: "stalwart://auth"
+      })
     });
-    if(!r1.ok) throw new Error("/api/oauth: "+r1.status);
-    var d1=await r1.json();
-    var code=d1.data.code;
-    var permissions=d1.data.permissions;
-    var isEnterprise=d1.data.isEnterprise||false;
+    if (!r1.ok) throw new Error("/api/auth: " + r1.status);
+    var d1 = await r1.json();
+    if (d1.type !== "authenticated") throw new Error("auth response: " + d1.type);
 
-    // Step 2: Exchange code for access + refresh tokens
-    var r2=await fetch("/auth/token",{
-      method:"POST",
-      headers:{"Content-Type":"text/plain;charset=UTF-8"},
-      body:"grant_type=authorization_code&client_id=webadmin&code="+encodeURIComponent(code)+"&redirect_uri=stalwart%3A%2F%2Fauth"
+    // Step 2: Exchange code for tokens
+    var r2 = await fetch("/auth/token", {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: "grant_type=authorization_code&client_id=stalwart-webui&code="
+        + encodeURIComponent(d1.client_code)
+        + "&redirect_uri=stalwart%3A%2F%2Fauth"
     });
-    if(!r2.ok) throw new Error("/auth/token: "+r2.status);
-    var d2=await r2.json();
+    if (!r2.ok) throw new Error("/auth/token: " + r2.status);
+    var tokens = await r2.json();
 
-    // Step 3: Set sessionStorage with the webadmin state
-    sessionStorage.setItem("webadmin_state",JSON.stringify({
-      base_url:"",
-      access_token:d2.access_token,
-      refresh_token:d2.refresh_token,
-      username:"admin",
-      is_valid:true,
-      is_enterprise:isEnterprise,
-      permissions:permissions
+    // Step 3: Fetch JMAP session to populate accounts
+    var r3 = await fetch("/jmap/session", {
+      headers: {"Authorization": "Bearer " + tokens.access_token}
+    });
+    if (!r3.ok) throw new Error("/jmap/session: " + r3.status);
+    var session = await r3.json();
+
+    // Step 4: Build account map for the Zustand store
+    var accounts = {};
+    var primaryId = null;
+    for (var id in session.accounts) {
+      accounts[id] = {name: session.accounts[id].name, isPersonal: session.accounts[id].isPersonal};
+      if (session.accounts[id].isPersonal) primaryId = id;
+    }
+    if (!primaryId && session.primaryAccounts) {
+      primaryId = session.primaryAccounts["urn:ietf:params:jmap:mail"] || Object.values(session.primaryAccounts)[0];
+    }
+
+    var coreCapabilities = session.capabilities["urn:ietf:params:jmap:core"] || {};
+
+    // Step 5: Write Zustand persist state to localStorage
+    localStorage.setItem("stalwart-auth", JSON.stringify({
+      state: {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        tokenExpiresAt: Date.now() + tokens.expires_in * 1000,
+        tokenEndpoint: session.apiUrl.replace(/\/jmap\/$/, "/auth/token"),
+        endSessionEndpoint: null,
+        accounts: accounts,
+        primaryAccountId: primaryId,
+        activeAccountId: primaryId,
+        apiUrl: session.apiUrl,
+        maxObjectsInGet: coreCapabilities.maxObjectsInGet || 500,
+        maxObjectsInSet: coreCapabilities.maxObjectsInSet || 500
+      },
+      version: 0
     }));
 
-    // Step 4: Redirect to admin dashboard
-    window.location.replace("/manage/directory/accounts");
+    // Step 6: Redirect to admin dashboard
+    window.location.replace("/admin/");
   } catch(e) {
-    document.querySelector("p").textContent="Login failed: "+e.message;
+    document.querySelector("p").textContent = "Login failed: " + e.message;
   }
 })();
 </script>
