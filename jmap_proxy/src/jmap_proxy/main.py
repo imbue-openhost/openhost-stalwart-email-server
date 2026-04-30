@@ -154,13 +154,16 @@ async def _proxy_http(scope: Scope, receive: Receive, send: Send) -> None:
             if not msg.get("more_body", False):
                 return
 
+    method = scope["method"]
+    has_body = method in ("POST", "PUT", "PATCH")
+
     client = httpx.AsyncClient(base_url=UPSTREAM_BASE, timeout=None, follow_redirects=True)
     try:
         upstream_req = client.build_request(
-            method=scope["method"],
+            method=method,
             url=target_url,
             headers=upstream_headers,
-            content=request_body(),
+            **({"content": request_body()} if has_body else {}),
         )
         upstream_resp = await client.send(upstream_req, stream=True)
     except Exception:
