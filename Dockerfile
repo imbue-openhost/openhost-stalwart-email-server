@@ -1,5 +1,5 @@
 # there's also an image for just the mail server part
-FROM stalwartlabs/stalwart:v0.16.2
+FROM stalwartlabs/stalwart:v0.16.3
 
 USER root
 RUN apt-get update && \
