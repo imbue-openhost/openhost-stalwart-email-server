@@ -52,6 +52,7 @@ sed -e "s|{{ADMIN_SECRET}}|$ADMIN_SECRET|g" \
 # First-boot: start in recovery mode, apply initial config via CLI
 INIT_DONE="$DATA_DIR/.initialized"
 if [ ! -f "$INIT_DONE" ]; then
+  echo "First boot detected: starting Stalwart in recovery mode to apply initial configuration"
     export STALWART_RECOVERY_MODE=1
 
     /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" &
