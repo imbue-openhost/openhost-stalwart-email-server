@@ -22,7 +22,7 @@ label = "smtp"
 container_port = 25
 host_port = 25
 
-[[services_v2.provides]]
+[[services.v2.provides]]
 service = "github.com/imbue-openhost/openhost-stalwart-email-server/services/jmap"
 version = "0.1.0"
 endpoint = "/_jmap_service/"
