@@ -91,6 +91,8 @@ def _map_path(path: str) -> str:
         path = "/" + path
     if path.rstrip("/") == "/.well-known/jmap":
         return path
+    if path == "/jmap" or path.startswith("/jmap/"):
+        return path
     return "/jmap" + path
 
 
