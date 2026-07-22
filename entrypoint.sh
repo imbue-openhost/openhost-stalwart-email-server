@@ -49,6 +49,49 @@ sed -e "s|{{ADMIN_BASIC_AUTH}}|$ADMIN_BASIC_AUTH|g" \
 sed -e "s|{{ADMIN_SECRET}}|$ADMIN_SECRET|g" \
     /opt/stalwart/static/owner-login.html > /opt/stalwart/static/owner-login-rendered.html
 
+# Fetch the SMTP smarthost relay config from the OpenHost router.  Outbound mail
+# must relay through the central email proxy (not direct MX) for multi-tenant
+# deliverability + safety.  The router returns the relay creds only to this
+# (mailbox) app, authenticated with our app token — the relay password is never
+# injected into the app environment.  Best-effort: if unavailable, we log and skip
+# relay/custom-domain config (the mailbox still runs).  Writes shell vars into
+# $DATA_DIR/.relay_env when configured.
+RELAY_ENV="$DATA_DIR/.relay_env"
+: > "$RELAY_ENV"
+if [ -n "$OPENHOST_ROUTER_URL" ] && [ -n "$OPENHOST_APP_TOKEN" ]; then
+    RELAY_JSON=$(curl -s -m 10 -H "Authorization: Bearer $OPENHOST_APP_TOKEN" \
+        "$OPENHOST_ROUTER_URL/api/email/relay-config" 2>/dev/null || true)
+    if [ -n "$RELAY_JSON" ]; then
+        # Parse with python3 (present in the image) and emit shell assignments.
+        # The JSON is passed via env (RELAY_JSON), NOT stdin — stdin is consumed by
+        # this heredoc (the python source), so json.load(sys.stdin) would read the
+        # source, not the response.
+        RELAY_JSON="$RELAY_JSON" python3 - "$RELAY_ENV" <<'PYEOF' || true
+import json, os, sys, shlex
+try:
+    data = json.loads(os.environ.get("RELAY_JSON") or "")
+except Exception:
+    sys.exit(0)
+if not isinstance(data, dict) or not data.get("configured"):
+    sys.exit(0)
+fields = {
+    "RELAY_HOST": data.get("smtp_relay_host") or "",
+    "RELAY_PORT": str(data.get("smtp_relay_port") or 587),
+    "RELAY_USER": data.get("smtp_relay_user") or "",
+    "RELAY_PASSWORD": data.get("smtp_relay_password") or "",
+    "RELAY_CUSTOM_DOMAIN": data.get("custom_domain") or "",
+}
+with open(sys.argv[1], "w") as f:
+    for k, v in fields.items():
+        f.write(f"{k}={shlex.quote(v)}\n")
+PYEOF
+    else
+        echo "Email relay config unavailable from router; skipping smarthost/custom-domain setup"
+    fi
+fi
+# shellcheck disable=SC1090
+. "$RELAY_ENV" 2>/dev/null || true
+
 # First-boot: start in recovery mode, apply initial config via CLI
 INIT_DONE="$DATA_DIR/.initialized"
 if [ ! -f "$INIT_DONE" ]; then
@@ -113,6 +156,88 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
         stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
     fi
 ) &
+
+# Reconcile the outbound SMTP smarthost relay + the delegated custom mail domain,
+# on every boot (idempotent upserts) so rotated relay creds and a
+# later-added custom domain are picked up.  Skipped entirely when the router
+# provided no relay config.  Runs once Stalwart is up on :8081.
+if [ -n "$RELAY_HOST" ]; then
+    (
+        export STALWART_URL="http://localhost:8081"
+        export STALWART_USER="admin"
+        export STALWART_PASSWORD="$ADMIN_SECRET"
+        for i in $(seq 1 60); do
+            sleep 1
+            stalwart-cli query Domain >/dev/null 2>&1 && break
+        done
+
+        # Build the apply plan (NDJSON, one op per line). Uses python3 to emit
+        # safe JSON with the fetched relay values. upsert => idempotent re-apply.
+        PLAN_FILE="$DATA_DIR/.relay_plan.ndjson"
+        RELAY_HOST="$RELAY_HOST" RELAY_PORT="$RELAY_PORT" RELAY_USER="$RELAY_USER" \
+        RELAY_PASSWORD="$RELAY_PASSWORD" RELAY_CUSTOM_DOMAIN="$RELAY_CUSTOM_DOMAIN" \
+        OWNER_EMAIL_USER="$OWNER_EMAIL_USER" OWNER_SECRET="$OWNER_SECRET" \
+        python3 - "$PLAN_FILE" <<'PYEOF' || true
+import json, os, sys
+
+lines = []
+
+# 1) Outbound smarthost: a Relay MtaRoute pointing at the email proxy, with AUTH.
+relay = {
+    "@type": "Relay",
+    "name": "openhost-smarthost",
+    "address": os.environ["RELAY_HOST"],
+    "port": int(os.environ.get("RELAY_PORT") or 587),
+    "protocol": "smtp",
+    "implicitTls": False,
+    "allowInvalidCerts": False,
+    "authUsername": os.environ.get("RELAY_USER") or "",
+    "authSecret": {"@type": "Value", "secret": os.environ.get("RELAY_PASSWORD") or ""},
+}
+lines.append({"@type": "upsert", "object": "MtaRoute", "matchOn": ["name"],
+              "value": {"openhost-smarthost": relay}})
+
+# 2) Bind the relay as the default outbound route (send everything through it).
+lines.append({"@type": "update", "object": "MtaOutboundStrategy",
+              "value": {"route": {"else": "'openhost-smarthost'"}}})
+
+# 3) Optional delegated custom mail domain + an owner account on it, so the
+#    owner can send/receive as their own domain. Idempotent upserts.
+custom = (os.environ.get("RELAY_CUSTOM_DOMAIN") or "").strip().lower().rstrip(".")
+if custom:
+    lines.append({"@type": "upsert", "object": "Domain", "matchOn": ["name"],
+                  "value": {"dom-custom": {
+                      "name": custom,
+                      "certificateManagement": {"@type": "Manual"},
+                      "dkimManagement": {"@type": "Automatic"},
+                      "dnsManagement": {"@type": "Manual"},
+                      "subAddressing": {"@type": "Enabled"},
+                  }}})
+    lines.append({"@type": "upsert", "object": "Account", "matchOn": ["name", "domainId"],
+                  "value": {"usr-custom": {
+                      "@type": "User",
+                      "name": os.environ.get("OWNER_EMAIL_USER") or "owner",
+                      "domainId": "#dom-custom",
+                      "credentials": [{"@type": "Password", "secret": os.environ.get("OWNER_SECRET") or ""}],
+                      "roles": {"@type": "User"},
+                      "permissions": {"@type": "Inherit"},
+                      "encryptionAtRest": {"@type": "Disabled"},
+                  }}})
+
+with open(sys.argv[1], "w") as f:
+    for op in lines:
+        f.write(json.dumps(op) + "\n")
+PYEOF
+
+        if [ -s "$PLAN_FILE" ]; then
+            if stalwart-cli apply --file "$PLAN_FILE" >/dev/null 2>&1; then
+                echo "Configured outbound smarthost relay${RELAY_CUSTOM_DOMAIN:+ + custom domain $RELAY_CUSTOM_DOMAIN}"
+            else
+                echo "WARNING: failed to apply relay/custom-domain config (outbound may fall back to direct MX)"
+            fi
+        fi
+    ) &
+fi
 
 # Start Stalwart normally in foreground
 echo "STALWART_HOSTNAME=$STALWART_HOSTNAME"
