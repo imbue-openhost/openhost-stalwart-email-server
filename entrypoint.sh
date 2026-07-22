@@ -58,6 +58,8 @@ sed -e "s|{{ADMIN_SECRET}}|$ADMIN_SECRET|g" \
 # $DATA_DIR/.relay_env when configured.
 RELAY_ENV="$DATA_DIR/.relay_env"
 : > "$RELAY_ENV"
+# Holds the relay password — restrict before writing anything into it.
+chmod 600 "$RELAY_ENV"
 if [ -n "$OPENHOST_ROUTER_URL" ] && [ -n "$OPENHOST_APP_TOKEN" ]; then
     RELAY_JSON=$(curl -s -m 10 -H "Authorization: Bearer $OPENHOST_APP_TOKEN" \
         "$OPENHOST_ROUTER_URL/api/email/relay-config" 2>/dev/null || true)
@@ -173,7 +175,11 @@ if [ -n "$RELAY_HOST" ]; then
 
         # Build the apply plan (NDJSON, one op per line). Uses python3 to emit
         # safe JSON with the fetched relay values. upsert => idempotent re-apply.
+        # The plan contains secrets (relay password, owner secret), so restrict it
+        # and remove it after applying.
         PLAN_FILE="$DATA_DIR/.relay_plan.ndjson"
+        : > "$PLAN_FILE"
+        chmod 600 "$PLAN_FILE"
         RELAY_HOST="$RELAY_HOST" RELAY_PORT="$RELAY_PORT" RELAY_USER="$RELAY_USER" \
         RELAY_PASSWORD="$RELAY_PASSWORD" RELAY_CUSTOM_DOMAIN="$RELAY_CUSTOM_DOMAIN" \
         OWNER_EMAIL_USER="$OWNER_EMAIL_USER" OWNER_SECRET="$OWNER_SECRET" \
@@ -236,6 +242,9 @@ PYEOF
                 echo "WARNING: failed to apply relay/custom-domain config (outbound may fall back to direct MX)"
             fi
         fi
+        # The plan carries secrets in plaintext; don't leave it on disk (or in
+        # data-dir backups) after it's been applied.
+        rm -f "$PLAN_FILE"
     ) &
 fi
 
