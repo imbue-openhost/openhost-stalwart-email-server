@@ -81,3 +81,19 @@ stalwart-cli update MtaOutboundStrategy singleton \
     --field 'route={"match":[{"if":"is_local_domain('"'"''"'"', rcpt_domain)","then":"'"'"'local'"'"'"}],"else":"'"'"'openhost-smarthost'"'"'"}'
 
 echo "relay-config: outbound smarthost configured"
+
+# Register a Stalwart webhook that fires on outbound relay AUTH failure
+# (delivery.auth-failed) so a rotated RELAY_SECRET is picked up immediately: the
+# sidecar re-runs this script on receipt instead of waiting for the next boot.
+# Idempotent — delete any prior hook first. Authenticated to the sidecar with a
+# per-container bearer token (RELAY_WEBHOOK_TOKEN, generated at boot). Skipped if
+# no token is set (e.g. reconfigure invoked from the webhook itself, to avoid a
+# re-registration loop).
+if [ -n "${RELAY_WEBHOOK_TOKEN:-}" ] && [ "${SKIP_WEBHOOK_REGISTER:-0}" != "1" ]; then
+    WEBHOOK_URL="http://127.0.0.1:8082/_email/relay-webhook"
+    stalwart-cli delete WebHook openhost-relay-auth >/dev/null 2>&1 || true
+    stalwart-cli apply --file /dev/stdin <<HOOK
+{"@type":"create","object":"WebHook","value":{"openhost-relay-auth":{"url":"$WEBHOOK_URL","events":["delivery.auth-failed"],"eventsPolicy":"include","level":"info","signatureKey":{"@type":"None"},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"Value","secret":"$RELAY_WEBHOOK_TOKEN"}},"httpHeaders":{},"throttle":"30s","enable":true}}}
+HOOK
+    echo "relay-config: registered delivery.auth-failed webhook -> sidecar"
+fi

@@ -24,6 +24,7 @@ from litestar.handlers import asgi
 from litestar.types import Receive, Scope, Send
 
 from jmap_proxy import inbound
+from jmap_proxy import relay_webhook
 
 logger = logging.getLogger("jmap_proxy")
 
@@ -166,6 +167,32 @@ async def _handle_inbound(scope: Scope, receive: Receive, send: Send) -> None:
         await _send_simple_response(send, 502, json.dumps({"error": "delivery_failed"}).encode())
         return
     await _send_simple_response(send, 200, json.dumps({"delivered": True}).encode())
+
+
+async def _handle_relay_webhook(scope: Scope, receive: Receive, send: Send) -> None:
+    """Stalwart delivery.auth-failed webhook -> re-sync the relay credential.
+
+    Authenticated by the per-container bearer token Stalwart is configured with.
+    On a burst of failures the reconfigure is coalesced to a single run.
+    """
+    if scope["method"] != "POST":
+        await _send_simple_response(send, 405, json.dumps({"error": "method_not_allowed"}).encode())
+        return
+    auth = _lookup_header(scope["headers"], b"authorization").decode("latin-1")
+    if not relay_webhook.is_authorized(auth):
+        await _send_simple_response(send, 401, json.dumps({"error": "unauthorized"}).encode())
+        return
+    raw = await _read_body(receive)
+    try:
+        payload = json.loads(raw or b"{}")
+    except Exception:
+        payload = {}
+    types = relay_webhook.event_types(payload) if isinstance(payload, dict) else []
+    if "delivery.auth-failed" in types:
+        relay_webhook.trigger_reconfigure()
+    # Always 200 so Stalwart doesn't retry/queue the webhook; the reconfigure is
+    # fire-and-forget and self-healing.
+    await _send_simple_response(send, 200, json.dumps({"ok": True}).encode())
 
 
 async def _proxy_http(scope: Scope, receive: Receive, send: Send) -> None:
@@ -333,8 +360,12 @@ async def proxy(scope: Scope, receive: Receive, send: Send) -> None:
         # This ASGI app is mounted at "/", so scope["path"] is mount-relative and
         # may arrive without a leading slash and/or with a trailing slash
         # (e.g. "_email/inbound/"). Normalize before matching.
-        if scope["path"].strip("/") == "_email/inbound":
+        path = scope["path"].strip("/")
+        if path == "_email/inbound":
             await _handle_inbound(scope, receive, send)
+            return
+        if path == "_email/relay-webhook":
+            await _handle_relay_webhook(scope, receive, send)
             return
         await _proxy_http(scope, receive, send)
     elif scope["type"] == "websocket":
