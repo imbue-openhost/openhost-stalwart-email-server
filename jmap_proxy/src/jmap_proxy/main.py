@@ -23,7 +23,6 @@ from litestar import Litestar
 from litestar.handlers import asgi
 from litestar.types import Receive, Scope, Send
 
-from jmap_proxy import inbound
 from jmap_proxy import relay_webhook
 
 logger = logging.getLogger("jmap_proxy")
@@ -139,34 +138,6 @@ async def _read_body(receive: Receive) -> bytes:
         if not msg.get("more_body", False):
             break
     return b"".join(chunks)
-
-
-async def _handle_inbound(scope: Scope, receive: Receive, send: Send) -> None:
-    """Deliver an inbound message forwarded by the OpenHost router into Stalwart.
-
-    The router has already authenticated the proxy hop and can only reach us over
-    the loopback proxy, so no auth is repeated here. We read the raw RFC822 body,
-    take the envelope from the X-OpenHost-Mail-* headers (SES receipt envelope),
-    and deliver over local SMTP. Delivery runs in a worker thread since smtplib
-    is blocking.
-    """
-    if scope["method"] != "POST":
-        await _send_simple_response(send, 405, json.dumps({"error": "method_not_allowed"}).encode())
-        return
-    raw = await _read_body(receive)
-    sender_hdr = _lookup_header(scope["headers"], b"x-openhost-mail-sender").decode("latin-1") or None
-    recipients_hdr = _lookup_header(scope["headers"], b"x-openhost-mail-recipients").decode("latin-1") or None
-    sender, recipients = inbound.resolve_envelope(raw, sender_hdr, recipients_hdr)
-    if not recipients:
-        await _send_simple_response(send, 400, json.dumps({"error": "no_recipients"}).encode())
-        return
-    try:
-        await asyncio.to_thread(inbound.deliver_to_stalwart, raw, sender, recipients)
-    except Exception:
-        logger.exception("inbound SMTP delivery to Stalwart failed")
-        await _send_simple_response(send, 502, json.dumps({"error": "delivery_failed"}).encode())
-        return
-    await _send_simple_response(send, 200, json.dumps({"delivered": True}).encode())
 
 
 async def _handle_relay_webhook(scope: Scope, receive: Receive, send: Send) -> None:
@@ -358,12 +329,8 @@ async def _proxy_ws(scope: Scope, receive: Receive, send: Send) -> None:
 async def proxy(scope: Scope, receive: Receive, send: Send) -> None:
     if scope["type"] == "http":
         # This ASGI app is mounted at "/", so scope["path"] is mount-relative and
-        # may arrive without a leading slash and/or with a trailing slash
-        # (e.g. "_email/inbound/"). Normalize before matching.
+        # may arrive without a leading slash and/or with a trailing slash. Normalize.
         path = scope["path"].strip("/")
-        if path == "_email/inbound":
-            await _handle_inbound(scope, receive, send)
-            return
         if path == "_email/relay-webhook":
             await _handle_relay_webhook(scope, receive, send)
             return

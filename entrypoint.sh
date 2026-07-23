@@ -100,8 +100,9 @@ export RELAY_WEBHOOK_TOKEN
 
 # Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
 # permissions, injects owner Basic auth, forwards to Stalwart on :8081). Also
-# serves /_email/inbound (mail ingest) and /_email/relay-webhook (relay re-sync
-# on Stalwart's delivery.auth-failed event).
+# serves /_email/relay-webhook (outbound relay re-sync on Stalwart's
+# delivery.auth-failed event). Inbound mail arrives directly on the SMTP :25
+# listener, not through the sidecar.
 USER_BASIC_AUTH="$USER_BASIC_AUTH" \
 STALWART_UPSTREAM="http://127.0.0.1:8081" \
 RELAY_WEBHOOK_TOKEN="$RELAY_WEBHOOK_TOKEN" \

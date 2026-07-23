@@ -16,14 +16,6 @@
 		reverse_proxy 127.0.0.1:8082
 	}
 
-	# Inbound mail from the OpenHost router (email proxy -> router -> here). The
-	# router has already authenticated the proxy hop; deliver into Stalwart. Sent
-	# to the sidecar which does the local SMTP delivery. Preserve the path (no
-	# handle_path strip) since the sidecar routes on /_email/inbound.
-	handle /_email/inbound {
-		reverse_proxy 127.0.0.1:8082
-	}
-
 	# Redirect / to auto-login if no webadmin session
 	@root_no_session {
 		path /
