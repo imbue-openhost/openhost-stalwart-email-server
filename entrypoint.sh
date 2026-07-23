@@ -114,6 +114,19 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
     fi
 ) &
 
+# Configure the outbound smarthost from the OpenHost email relay-config once the
+# admin API is up (best-effort; never blocks the mail server from starting).
+(
+    export STALWART_URL="http://localhost:8081"
+    export STALWART_USER="admin"
+    export STALWART_PASSWORD="$ADMIN_SECRET"
+    for i in $(seq 1 60); do
+        sleep 1
+        stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1 && break
+    done
+    /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
+) &
+
 # Start Stalwart normally in foreground
 echo "STALWART_HOSTNAME=$STALWART_HOSTNAME"
 exec /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json"

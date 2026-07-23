@@ -23,6 +23,8 @@ from litestar import Litestar
 from litestar.handlers import asgi
 from litestar.types import Receive, Scope, Send
 
+from jmap_proxy import inbound
+
 logger = logging.getLogger("jmap_proxy")
 
 UPSTREAM_BASE = os.environ.get("STALWART_UPSTREAM", "http://127.0.0.1:8081")
@@ -122,6 +124,48 @@ async def _send_simple_response(send: Send, status: int, body: bytes) -> None:
         }
     )
     await send({"type": "http.response.body", "body": body, "more_body": False})
+
+
+async def _read_body(receive: Receive) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        msg = await receive()
+        if msg["type"] == "http.disconnect":
+            break
+        chunk = msg.get("body", b"") or b""
+        if chunk:
+            chunks.append(chunk)
+        if not msg.get("more_body", False):
+            break
+    return b"".join(chunks)
+
+
+async def _handle_inbound(scope: Scope, receive: Receive, send: Send) -> None:
+    """Deliver an inbound message forwarded by the OpenHost router into Stalwart.
+
+    The router has already authenticated the proxy hop and can only reach us over
+    the loopback proxy, so no auth is repeated here. We read the raw RFC822 body,
+    take the envelope from the X-OpenHost-Mail-* headers (SES receipt envelope),
+    and deliver over local SMTP. Delivery runs in a worker thread since smtplib
+    is blocking.
+    """
+    if scope["method"] != "POST":
+        await _send_simple_response(send, 405, json.dumps({"error": "method_not_allowed"}).encode())
+        return
+    raw = await _read_body(receive)
+    sender_hdr = _lookup_header(scope["headers"], b"x-openhost-mail-sender").decode("latin-1") or None
+    recipients_hdr = _lookup_header(scope["headers"], b"x-openhost-mail-recipients").decode("latin-1") or None
+    sender, recipients = inbound.resolve_envelope(raw, sender_hdr, recipients_hdr)
+    if not recipients:
+        await _send_simple_response(send, 400, json.dumps({"error": "no_recipients"}).encode())
+        return
+    try:
+        await asyncio.to_thread(inbound.deliver_to_stalwart, raw, sender, recipients)
+    except Exception:
+        logger.exception("inbound SMTP delivery to Stalwart failed")
+        await _send_simple_response(send, 502, json.dumps({"error": "delivery_failed"}).encode())
+        return
+    await _send_simple_response(send, 200, json.dumps({"delivered": True}).encode())
 
 
 async def _proxy_http(scope: Scope, receive: Receive, send: Send) -> None:
@@ -286,6 +330,12 @@ async def _proxy_ws(scope: Scope, receive: Receive, send: Send) -> None:
 @asgi("/", is_mount=True)
 async def proxy(scope: Scope, receive: Receive, send: Send) -> None:
     if scope["type"] == "http":
+        # This ASGI app is mounted at "/", so scope["path"] is mount-relative and
+        # may arrive without a leading slash and/or with a trailing slash
+        # (e.g. "_email/inbound/"). Normalize before matching.
+        if scope["path"].strip("/") == "_email/inbound":
+            await _handle_inbound(scope, receive, send)
+            return
         await _proxy_http(scope, receive, send)
     elif scope["type"] == "websocket":
         await _proxy_ws(scope, receive, send)
