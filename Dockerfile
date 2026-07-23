@@ -21,7 +21,8 @@ RUN cd /opt/jmap_proxy && uv sync --no-dev
 COPY Caddyfile.template /etc/caddy/Caddyfile.template
 COPY owner-login.html /opt/stalwart/static/owner-login.html
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY configure-relay.sh /usr/local/bin/configure-relay.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/configure-relay.sh
 
 EXPOSE 8080 25
 

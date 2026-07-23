@@ -87,10 +87,24 @@ PLAN
     unset STALWART_RECOVERY_MODE
 fi
 
+# Per-container token shared between the sidecar and the Stalwart webhook so a
+# delivery.auth-failed event can authenticate to the sidecar's relay-webhook
+# endpoint. Persisted so it's stable across the sidecar + configure-relay runs.
+WEBHOOK_TOKEN_FILE="$DATA_DIR/.relay_webhook_token"
+if [ ! -f "$WEBHOOK_TOKEN_FILE" ]; then
+    head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "$WEBHOOK_TOKEN_FILE"
+    chmod 600 "$WEBHOOK_TOKEN_FILE"
+fi
+RELAY_WEBHOOK_TOKEN="$(cat "$WEBHOOK_TOKEN_FILE")"
+export RELAY_WEBHOOK_TOKEN
+
 # Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
-# permissions, injects owner Basic auth, forwards to Stalwart on :8081).
+# permissions, injects owner Basic auth, forwards to Stalwart on :8081). Also
+# serves /_email/inbound (mail ingest) and /_email/relay-webhook (relay re-sync
+# on Stalwart's delivery.auth-failed event).
 USER_BASIC_AUTH="$USER_BASIC_AUTH" \
 STALWART_UPSTREAM="http://127.0.0.1:8081" \
+RELAY_WEBHOOK_TOKEN="$RELAY_WEBHOOK_TOKEN" \
     /opt/jmap_proxy/.venv/bin/uvicorn jmap_proxy.main:app \
     --host 127.0.0.1 --port 8082 \
     --no-access-log &
@@ -112,6 +126,19 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
     if [ -n "$LOG_ID" ]; then
         stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
     fi
+) &
+
+# Configure the outbound smarthost from the OpenHost email relay-config once the
+# admin API is up (best-effort; never blocks the mail server from starting).
+(
+    export STALWART_URL="http://localhost:8081"
+    export STALWART_USER="admin"
+    export STALWART_PASSWORD="$ADMIN_SECRET"
+    for i in $(seq 1 60); do
+        sleep 1
+        stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1 && break
+    done
+    /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
 ) &
 
 # Start Stalwart normally in foreground
