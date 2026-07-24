@@ -7,7 +7,9 @@ export MAIL_HOSTNAME="${MAIL_HOSTNAME:-${APP_HOSTNAME:-$DEFAULT_DOMAIN}}"
 # Stable hostname for cluster node ID — without this, every container restart
 # creates a new node entry (since podman gives each container a random hostname)
 export STALWART_HOSTNAME="${APP_HOSTNAME:-$MAIL_HOSTNAME}"
-OWNER_EMAIL_USER="${OWNER_EMAIL_USER:-owner}"
+# Exported so configure-relay.sh can add an owner address on a custom mail
+# domain (inbound for a BYO domain is delivered to the same owner mailbox).
+export OWNER_EMAIL_USER="${OWNER_EMAIL_USER:-owner}"
 OWNER_EMAIL_DOMAIN="${OWNER_EMAIL_DOMAIN:-$DEFAULT_DOMAIN}"
 DATA_DIR="${OPENHOST_APP_DATA_DIR:-/var/lib/stalwart}"
 CONFIG_DIR="/etc/stalwart"
