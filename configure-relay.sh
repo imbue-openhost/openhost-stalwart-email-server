@@ -59,28 +59,78 @@ if [ "${CONFIGURED:-0}" != "1" ]; then
     exit 0
 fi
 
-# Implicit TLS when the relay port is the submission-over-TLS port (465).
-if [ "$RELAY_PORT" = "465" ]; then
-    IMPLICIT_TLS=true
-else
-    IMPLICIT_TLS=false
-fi
+# The openhost-email-proxy terminates TLS at the Fly edge (implicit TLS) on
+# whatever port it publishes (465 and 587), then forwards the decrypted stream to
+# its internal listener. So the smarthost always uses implicit TLS regardless of
+# port. (587 is used because some providers — e.g. Hetzner — block outbound 465.)
+IMPLICIT_TLS=true
 
 echo "relay-config: configuring outbound smarthost $RELAY_USER@$RELAY_HOST:$RELAY_PORT (implicitTls=$IMPLICIT_TLS)"
 
-# Create-or-update the relay route by name ("openhost-smarthost"). Delete any
-# prior instance first so re-provisioning (e.g. rotated credential) is idempotent
-# across reboots; ignore errors when it doesn't yet exist.
-stalwart-cli delete MtaRoute openhost-smarthost >/dev/null 2>&1 || true
+# Create-or-update the relay route named "openhost-smarthost". Delete any prior
+# instance first so re-provisioning (rotated credential, changed port) is
+# idempotent. NOTE: `delete MtaRoute` takes the object ID, not the name — a
+# stored route has an auto-generated id, so we resolve the id by name and delete
+# that (a plain `delete ... openhost-smarthost` is a no-op and leaves the old
+# route, causing a primaryKeyViolation on the subsequent create).
+_route_id="$(stalwart-cli query MtaRoute --fields id,name --json 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        o = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(o, dict) and o.get("name") == "openhost-smarthost":
+        print(o.get("id") or "")
+        break
+')"
+if [ -n "$_route_id" ]; then
+    stalwart-cli delete MtaRoute "$_route_id" >/dev/null 2>&1 || true
+fi
 stalwart-cli apply --file /dev/stdin <<PLAN
 {"@type":"create","object":"MtaRoute","value":{"openhost-smarthost":{"@type":"Relay","name":"openhost-smarthost","description":"OpenHost email proxy smarthost","address":"$RELAY_HOST","port":$RELAY_PORT,"protocol":"smtp","implicitTls":$IMPLICIT_TLS,"allowInvalidCerts":false,"authUsername":"$RELAY_USER","authSecret":{"@type":"Value","secret":"$RELAY_PW"}}}}
 PLAN
 
 # Point the default outbound route at the smarthost; keep local mail local.
+# MtaOutboundStrategy.route is an Expression whose ``match`` is a MAP of
+# stringified indices (not an array), and is_local_domain takes a single arg.
+# Getting either wrong yields "invalidPatch: Invalid value for object property".
 stalwart-cli update MtaOutboundStrategy singleton \
-    --field 'route={"match":[{"if":"is_local_domain('"'"''"'"', rcpt_domain)","then":"'"'"'local'"'"'"}],"else":"'"'"'openhost-smarthost'"'"'"}'
+    --field 'route={"match":{"0":{"if":"is_local_domain(rcpt_domain)","then":"'"'"'local'"'"'"}},"else":"'"'"'openhost-smarthost'"'"'"}'
 
-echo "relay-config: outbound smarthost configured"
+# Disable Stalwart's own outbound DKIM signing. Mail relayed through the SES
+# smarthost is DKIM-signed by SES (Easy DKIM, using the domain identity whose
+# CNAMEs the instance publishes). If Stalwart ALSO signs, the message carries two
+# DKIM-Signature headers and SES rejects it with
+# "BadRequestException: Duplicate header 'DKIM-Signature'". So we turn signing off
+# in two places: the signing expression, and the auto-generated per-domain keys.
+stalwart-cli update SenderAuth singleton \
+    --field 'dkimSignDomain={"match":{},"else":"false"}' >/dev/null 2>&1 || true
+# Delete any auto-created DKIM signature keys (the expression alone isn't enough
+# on some builds). Idempotent: nothing to delete on a re-run.
+_dkim_ids="$(stalwart-cli query DkimSignature --fields id --json 2>/dev/null | python3 -c '
+import json, sys
+ids = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        o = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(o, dict) and o.get("id"):
+        ids.append(o["id"])
+print(",".join(ids))
+')"
+if [ -n "$_dkim_ids" ]; then
+    stalwart-cli delete DkimSignature --ids "$_dkim_ids" >/dev/null 2>&1 || true
+fi
+
+echo "relay-config: outbound smarthost configured (SES signs DKIM; local signing disabled)"
 
 # Register a Stalwart webhook that fires on outbound relay AUTH failure
 # (delivery.auth-failed) so a rotated RELAY_SECRET is picked up immediately: the
