@@ -101,35 +101,44 @@ RELAY_WEBHOOK_TOKEN="$(cat "$WEBHOOK_TOKEN_FILE")"
 export RELAY_WEBHOOK_TOKEN
 
 # Apply the OpenHost email relay config (smarthost route, port, DKIM-disable,
-# webhook) BEFORE the main Stalwart starts. Stalwart caches the
-# MtaOutboundStrategy at startup and does NOT hot-reload it when changed via the
-# admin API, so applying it against the already-running server (the old approach)
-# left outbound on the default MX route until the next restart — external mail
-# timed out on the provider-blocked port 25. We instead write the config in a
-# short recovery-mode pass here (runs every boot, so rotated relay credentials
-# are still picked up); the main Stalwart below then reads it from its first
-# start. Uses recovery port 8080, which is free at this point (Caddy/sidecar
-# start later). Best-effort: never blocks boot.
+# webhook) and reconcile the log path BEFORE the main Stalwart starts, then
+# restart Stalwart so it reads them. Stalwart caches the MtaOutboundStrategy at
+# startup and does NOT hot-reload it when changed via the admin API, so applying
+# it against the long-running server (the old approach) left outbound on the
+# default MX route until the next restart — external mail timed out on the
+# provider-blocked port 25. So we run a throwaway normal-mode Stalwart on :8081,
+# apply the config against its full admin API (recovery mode's API is unreliable),
+# stop it, and let the main Stalwart below read the persisted config from its
+# first start. Runs every boot, so rotated relay credentials are still applied.
+# Best-effort: never blocks boot.
 (
-    export STALWART_RECOVERY_MODE=1
-    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" &
-    RELAY_STALWART_PID=$!
-    export STALWART_URL="http://localhost:8080"
+    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" >/dev/null 2>&1 &
+    PRESTART_PID=$!
+    export STALWART_URL="http://localhost:8081"
     export STALWART_USER="admin"
     export STALWART_PASSWORD="$ADMIN_SECRET"
     up=0
-    for i in $(seq 1 30); do
+    for i in $(seq 1 60); do
         if stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1; then up=1; break; fi
         sleep 1
     done
     if [ "$up" = "1" ]; then
         /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
+        # Reconcile the Log tracer path to the persistent volume (was a separate
+        # post-start pass; do it here so it also survives into the main start).
+        LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
+        if [ -n "$LOG_ID" ]; then
+            stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
+        fi
     else
-        echo "relay-config: recovery-mode admin API did not come up; skipping"
+        echo "relay-config: pre-start admin API did not come up; skipping"
     fi
-    kill "$RELAY_STALWART_PID" 2>/dev/null || true
-    wait "$RELAY_STALWART_PID" 2>/dev/null || true
-    unset STALWART_RECOVERY_MODE STALWART_URL STALWART_USER STALWART_PASSWORD
+    kill "$PRESTART_PID" 2>/dev/null || true
+    wait "$PRESTART_PID" 2>/dev/null || true
+    # Give the OS a moment to release the listener sockets (:8081, :25) the
+    # throwaway server held, so the main Stalwart below can bind them.
+    sleep 2
+    unset STALWART_URL STALWART_USER STALWART_PASSWORD
 )
 
 
@@ -147,22 +156,6 @@ RELAY_WEBHOOK_TOKEN="$RELAY_WEBHOOK_TOKEN" \
 
 # Start Caddy (CORS + owner-auth proxy on :8080 -> :8081) in background
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
-
-# Reconcile Log tracer path — Stalwart's default points to ephemeral /var/log/stalwart;
-# repoint it under $DATA_DIR so logs persist across container restarts. Idempotent.
-(
-    export STALWART_URL="http://localhost:8081"
-    export STALWART_USER="admin"
-    export STALWART_PASSWORD="$ADMIN_SECRET"
-    for i in $(seq 1 60); do
-        sleep 1
-        stalwart-cli query Tracer >/dev/null 2>&1 && break
-    done
-    LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
-    if [ -n "$LOG_ID" ]; then
-        stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
-    fi
-) &
 
 # Start Stalwart normally in foreground (reads the relay config applied above).
 echo "STALWART_HOSTNAME=$STALWART_HOSTNAME"
