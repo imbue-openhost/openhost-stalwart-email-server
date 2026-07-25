@@ -112,20 +112,28 @@ export RELAY_WEBHOOK_TOKEN
 # first start. Runs every boot, so rotated relay credentials are still applied.
 # Best-effort: never blocks boot.
 (
-    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" >/dev/null 2>&1 &
+    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" &
     PRESTART_PID=$!
     export STALWART_URL="http://localhost:8081"
     export STALWART_USER="admin"
     export STALWART_PASSWORD="$ADMIN_SECRET"
+    AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64 | tr -d '\n')
+    # Wait for the admin HTTP endpoint to actually answer an authenticated request
+    # (a plain port check isn't enough — stalwart-cli's schema refresh 401s until
+    # the server is fully initialized). Poll a lightweight authed GET; /jmap/session
+    # returns 200 once the server is fully up.
     up=0
-    for i in $(seq 1 60); do
-        if stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1; then up=1; break; fi
+    for i in $(seq 1 90); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Basic $AUTH" \
+            "http://localhost:8081/jmap/session" 2>/dev/null || true)
+        if [ "$code" = "200" ]; then up=1; break; fi
         sleep 1
     done
     if [ "$up" = "1" ]; then
+        # small settle so the object API/schema is ready for stalwart-cli
+        sleep 2
         /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
-        # Reconcile the Log tracer path to the persistent volume (was a separate
-        # post-start pass; do it here so it also survives into the main start).
+        # Reconcile the Log tracer path to the persistent volume.
         LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
         if [ -n "$LOG_ID" ]; then
             stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
@@ -137,8 +145,8 @@ export RELAY_WEBHOOK_TOKEN
     wait "$PRESTART_PID" 2>/dev/null || true
     # Give the OS a moment to release the listener sockets (:8081, :25) the
     # throwaway server held, so the main Stalwart below can bind them.
-    sleep 2
-    unset STALWART_URL STALWART_USER STALWART_PASSWORD
+    sleep 3
+    unset STALWART_URL STALWART_USER STALWART_PASSWORD AUTH
 )
 
 
