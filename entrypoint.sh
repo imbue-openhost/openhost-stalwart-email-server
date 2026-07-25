@@ -89,7 +89,9 @@ fi
 
 # Per-container token shared between the sidecar and the Stalwart webhook so a
 # delivery.auth-failed event can authenticate to the sidecar's relay-webhook
-# endpoint. Persisted so it's stable across the sidecar + configure-relay runs.
+# endpoint. Generated BEFORE the relay-config pass below so configure-relay.sh
+# (which only registers the webhook when RELAY_WEBHOOK_TOKEN is set) can create
+# it. Persisted so it's stable across the sidecar + configure-relay runs.
 WEBHOOK_TOKEN_FILE="$DATA_DIR/.relay_webhook_token"
 if [ ! -f "$WEBHOOK_TOKEN_FILE" ]; then
     head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "$WEBHOOK_TOKEN_FILE"
@@ -97,6 +99,39 @@ if [ ! -f "$WEBHOOK_TOKEN_FILE" ]; then
 fi
 RELAY_WEBHOOK_TOKEN="$(cat "$WEBHOOK_TOKEN_FILE")"
 export RELAY_WEBHOOK_TOKEN
+
+# Apply the OpenHost email relay config (smarthost route, port, DKIM-disable,
+# webhook) BEFORE the main Stalwart starts. Stalwart caches the
+# MtaOutboundStrategy at startup and does NOT hot-reload it when changed via the
+# admin API, so applying it against the already-running server (the old approach)
+# left outbound on the default MX route until the next restart — external mail
+# timed out on the provider-blocked port 25. We instead write the config in a
+# short recovery-mode pass here (runs every boot, so rotated relay credentials
+# are still picked up); the main Stalwart below then reads it from its first
+# start. Uses recovery port 8080, which is free at this point (Caddy/sidecar
+# start later). Best-effort: never blocks boot.
+(
+    export STALWART_RECOVERY_MODE=1
+    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" &
+    RELAY_STALWART_PID=$!
+    export STALWART_URL="http://localhost:8080"
+    export STALWART_USER="admin"
+    export STALWART_PASSWORD="$ADMIN_SECRET"
+    up=0
+    for i in $(seq 1 30); do
+        if stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1; then up=1; break; fi
+        sleep 1
+    done
+    if [ "$up" = "1" ]; then
+        /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
+    else
+        echo "relay-config: recovery-mode admin API did not come up; skipping"
+    fi
+    kill "$RELAY_STALWART_PID" 2>/dev/null || true
+    wait "$RELAY_STALWART_PID" 2>/dev/null || true
+    unset STALWART_RECOVERY_MODE STALWART_URL STALWART_USER STALWART_PASSWORD
+)
+
 
 # Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
 # permissions, injects owner Basic auth, forwards to Stalwart on :8081). Also
@@ -129,19 +164,6 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
     fi
 ) &
 
-# Configure the outbound smarthost from the OpenHost email relay-config once the
-# admin API is up (best-effort; never blocks the mail server from starting).
-(
-    export STALWART_URL="http://localhost:8081"
-    export STALWART_USER="admin"
-    export STALWART_PASSWORD="$ADMIN_SECRET"
-    for i in $(seq 1 60); do
-        sleep 1
-        stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1 && break
-    done
-    /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
-) &
-
-# Start Stalwart normally in foreground
+# Start Stalwart normally in foreground (reads the relay config applied above).
 echo "STALWART_HOSTNAME=$STALWART_HOSTNAME"
 exec /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json"
