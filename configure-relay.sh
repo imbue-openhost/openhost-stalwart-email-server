@@ -141,9 +141,29 @@ echo "relay-config: outbound smarthost configured (SES signs DKIM; local signing
 # re-registration loop).
 if [ -n "${RELAY_WEBHOOK_TOKEN:-}" ] && [ "${SKIP_WEBHOOK_REGISTER:-0}" != "1" ]; then
     WEBHOOK_URL="http://127.0.0.1:8082/_email/relay-webhook"
-    stalwart-cli delete WebHook openhost-relay-auth >/dev/null 2>&1 || true
+    # Delete a prior hook by id (delete takes the id, not the name), so re-runs
+    # don't hit a primaryKeyViolation.
+    _wh_id="$(stalwart-cli query WebHook --fields id,url --json 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        o = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(o, dict) and o.get("url", "").endswith("/_email/relay-webhook"):
+        print(o.get("id") or "")
+        break
+')"
+    if [ -n "$_wh_id" ]; then
+        stalwart-cli delete WebHook --ids "$_wh_id" >/dev/null 2>&1 || true
+    fi
+    # ``events`` is a set<EventType>, which serializes as a MAP of value -> true
+    # (not an array); an array yields "invalidPatch: ... Properties: events".
     stalwart-cli apply --file /dev/stdin <<HOOK
-{"@type":"create","object":"WebHook","value":{"openhost-relay-auth":{"url":"$WEBHOOK_URL","events":["delivery.auth-failed"],"eventsPolicy":"include","level":"info","signatureKey":{"@type":"None"},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"Value","secret":"$RELAY_WEBHOOK_TOKEN"}},"httpHeaders":{},"throttle":"30s","enable":true}}}
+{"@type":"create","object":"WebHook","value":{"openhost-relay-auth":{"url":"$WEBHOOK_URL","events":{"delivery.auth-failed":true},"eventsPolicy":"include","level":"info","signatureKey":{"@type":"None"},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"Value","secret":"$RELAY_WEBHOOK_TOKEN"}},"httpHeaders":{},"throttle":"30s","enable":true}}}
 HOOK
     echo "relay-config: registered delivery.auth-failed webhook -> sidecar"
 fi
