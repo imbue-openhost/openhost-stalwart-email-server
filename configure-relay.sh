@@ -65,15 +65,6 @@ fi
 # port. (587 is used because some providers — e.g. Hetzner — block outbound 465.)
 IMPLICIT_TLS=true
 
-# Determine whether the outbound STRATEGY already routes to the smarthost BEFORE
-# we (re)apply. Only the MtaOutboundStrategy.route expression is cached at startup
-# and needs a restart to take effect; the MtaRoute credential is read per delivery
-# (no restart needed), which is why we always re-apply below — that keeps credential
-# rotation working (every boot + the delivery.auth-failed webhook re-sync) without
-# a restart. We request the one-time restart only when the strategy wasn't already
-# pointed at the smarthost (first enable / route change).
-_route_else_before="$(stalwart-cli get MtaOutboundStrategy singleton --fields route --json 2>/dev/null | grep -c 'openhost-smarthost' || true)"
-
 echo "relay-config: configuring outbound smarthost $RELAY_USER@$RELAY_HOST:$RELAY_PORT (implicitTls=$IMPLICIT_TLS)"
 
 # Create-or-update the relay route named "openhost-smarthost". Delete any prior
@@ -140,16 +131,6 @@ if [ -n "$_dkim_ids" ]; then
 fi
 
 echo "relay-config: outbound smarthost configured (SES signs DKIM; local signing disabled)"
-
-# Request a one-time restart ONLY if the cached outbound strategy wasn't already
-# routing to the smarthost before this run (first enable / route change). A
-# credential-only rotation leaves the strategy unchanged (still ->smarthost), so
-# _route_else_before is non-zero and we do NOT restart — the rotated MtaRoute
-# secret is picked up per-delivery without one. The marker path is passed by the
-# entrypoint; the webhook re-sync path leaves it unset and never restarts.
-if [ -n "${RELAY_RESTART_MARKER:-}" ] && [ "$_route_else_before" = "0" ]; then
-    : > "$RELAY_RESTART_MARKER" 2>/dev/null || true
-fi
 
 # Register a Stalwart webhook that fires on outbound relay AUTH failure
 # (delivery.auth-failed) so a rotated RELAY_SECRET is picked up immediately: the
