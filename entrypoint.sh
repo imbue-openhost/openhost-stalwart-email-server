@@ -100,57 +100,49 @@ fi
 RELAY_WEBHOOK_TOKEN="$(cat "$WEBHOOK_TOKEN_FILE")"
 export RELAY_WEBHOOK_TOKEN
 
-# Apply the OpenHost email relay config against the running Stalwart once it's up,
-# then restart the process ONCE so the config takes effect. Stalwart caches the
-# MtaOutboundStrategy (and DKIM signing) at startup and does NOT hot-reload it
-# when changed via the admin API, so a config applied to the live server doesn't
-# route through the smarthost until a restart — external mail would otherwise time
-# out on the provider-blocked port 25.
+# Apply the OpenHost email relay config to the DB in a short pre-start pass, so
+# the main Stalwart below reads it from its first start. Stalwart caches the
+# MtaOutboundStrategy at startup and does NOT hot-reload it, so the outbound
+# smarthost route must be present in the DB *before* the server that serves mail
+# starts — otherwise outbound stays on the default MX route (which times out on
+# the provider-blocked port 25) until the next restart.
 #
-# Mechanism: configure-relay.sh writes the route/smarthost/DKIM/webhook to the DB
-# and, when it actually changed something, drops a one-shot restart marker. This
-# subshell then exits PID 1 (the container's restart policy is unless-stopped, so
-# podman brings it right back), and the next boot reads the persisted config and
-# finds nothing to change (no marker, no restart) — so it converges in exactly one
-# extra restart, with no loop. Runs every boot, so rotated credentials still apply.
-# Best-effort: never blocks boot.
-RESTART_MARKER="$DATA_DIR/.relay_restart_pending"
-rm -f "$RESTART_MARKER"
+# We reuse the SAME proven pattern as the first-boot init block above: run a
+# throwaway Stalwart in RECOVERY mode (its admin listener is always :8080, which
+# is free here — the sidecar/Caddy start later), apply the config, stop it, then
+# fall through to the real `exec stalwart`. Recovery mode is used (not a normal
+# start) because it reliably comes up fast on a fixed port; the first-boot block
+# already demonstrates apply-against-recovery works. This never touches the
+# container's PID 1, so it can't leave the mailbox stopped. Runs every boot; the
+# converge check in configure-relay keeps re-runs cheap. Best-effort.
 (
-    export STALWART_URL="http://localhost:8081"
+    export STALWART_RECOVERY_MODE=1
+    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" &
+    PRESTART_PID=$!
+    export STALWART_URL="http://localhost:8080"
     export STALWART_USER="admin"
     export STALWART_PASSWORD="$ADMIN_SECRET"
-    AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64 | tr -d '\n')
-    # Wait for the main Stalwart's admin HTTP endpoint to answer an authed request
-    # (/jmap/session returns 200 once fully up).
     up=0
-    for i in $(seq 1 90); do
-        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Basic $AUTH" \
-            "http://localhost:8081/jmap/session" 2>/dev/null || true)
-        if [ "$code" = "200" ]; then up=1; break; fi
+    for i in $(seq 1 30); do
+        if curl -s -o /dev/null "http://localhost:8080/" 2>/dev/null; then up=1; break; fi
         sleep 1
     done
     if [ "$up" != "1" ]; then
-        echo "relay-config: admin API did not come up; skipping"
+        echo "relay-config: recovery admin API did not come up; skipping (applies on next restart)"
     else
-        sleep 2  # let the object API/schema settle for stalwart-cli
-        # Reconcile the Log tracer path to the persistent volume (idempotent).
+        sleep 1
         LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
         if [ -n "$LOG_ID" ]; then
             stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
         fi
-        RELAY_RESTART_MARKER="$RESTART_MARKER" /usr/local/bin/configure-relay.sh \
-            || echo "relay-config: setup failed (continuing)"
-        if [ -f "$RESTART_MARKER" ]; then
-            rm -f "$RESTART_MARKER"
-            echo "relay-config: config changed; restarting Stalwart once to apply the route"
-            # Exit PID 1; podman (restart=unless-stopped) brings the container back,
-            # and the next boot finds the config already applied (no restart).
-            kill 1 2>/dev/null || true
-        fi
+        /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
     fi
-    unset STALWART_URL STALWART_USER STALWART_PASSWORD AUTH
-) &
+    kill "$PRESTART_PID" 2>/dev/null || true
+    wait "$PRESTART_PID" 2>/dev/null || true
+    unset STALWART_RECOVERY_MODE STALWART_URL STALWART_USER STALWART_PASSWORD
+)
+# Settle so the throwaway server's listener socket (:8080) is released.
+sleep 2
 
 
 # Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
