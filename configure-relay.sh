@@ -163,7 +163,7 @@ for line in sys.stdin:
     # ``events`` is a set<EventType>, which serializes as a MAP of value -> true
     # (not an array); an array yields "invalidPatch: ... Properties: events".
     stalwart-cli apply --file /dev/stdin <<HOOK
-{"@type":"create","object":"WebHook","value":{"openhost-relay-auth":{"url":"$WEBHOOK_URL","events":{"delivery.auth-failed":true},"eventsPolicy":"include","level":"info","signatureKey":{"@type":"None"},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"Value","secret":"$RELAY_WEBHOOK_TOKEN"}},"httpHeaders":{},"throttle":"30s","enable":true}}}
+{"@type":"create","object":"WebHook","value":{"openhost-relay-auth":{"url":"$WEBHOOK_URL","events":{"delivery.auth-failed":true},"eventsPolicy":"include","level":"info","signatureKey":{"@type":"None"},"httpAuth":{"@type":"Bearer","bearerToken":{"@type":"Value","secret":"$RELAY_WEBHOOK_TOKEN"}},"httpHeaders":{},"throttle":30000,"enable":true}}}
 HOOK
     echo "relay-config: registered delivery.auth-failed webhook -> sidecar"
 fi
