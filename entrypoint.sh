@@ -100,46 +100,57 @@ fi
 RELAY_WEBHOOK_TOKEN="$(cat "$WEBHOOK_TOKEN_FILE")"
 export RELAY_WEBHOOK_TOKEN
 
-# Apply the OpenHost email relay config (smarthost route, port, DKIM-disable,
-# webhook) and reconcile the log path BEFORE the main Stalwart starts, then
-# restart Stalwart so it reads them. Stalwart caches the MtaOutboundStrategy at
-# startup and does NOT hot-reload it when changed via the admin API, so applying
-# it against the long-running server (the old approach) left outbound on the
-# default MX route until the next restart — external mail timed out on the
-# provider-blocked port 25. So we run a throwaway normal-mode Stalwart on :8081,
-# apply the config against its full admin API (recovery mode's API is unreliable),
-# stop it, and let the main Stalwart below read the persisted config from its
-# first start. Runs every boot, so rotated relay credentials are still applied.
+# Apply the OpenHost email relay config against the running Stalwart once it's up,
+# then restart the process ONCE so the config takes effect. Stalwart caches the
+# MtaOutboundStrategy (and DKIM signing) at startup and does NOT hot-reload it
+# when changed via the admin API, so a config applied to the live server doesn't
+# route through the smarthost until a restart — external mail would otherwise time
+# out on the provider-blocked port 25.
+#
+# Mechanism: configure-relay.sh writes the route/smarthost/DKIM/webhook to the DB
+# and, when it actually changed something, drops a one-shot restart marker. This
+# subshell then exits PID 1 (the container's restart policy is unless-stopped, so
+# podman brings it right back), and the next boot reads the persisted config and
+# finds nothing to change (no marker, no restart) — so it converges in exactly one
+# extra restart, with no loop. Runs every boot, so rotated credentials still apply.
 # Best-effort: never blocks boot.
+RESTART_MARKER="$DATA_DIR/.relay_restart_pending"
+rm -f "$RESTART_MARKER"
 (
-    /usr/local/bin/stalwart --config "$CONFIG_DIR/config.json" >/dev/null 2>&1 &
-    PRESTART_PID=$!
     export STALWART_URL="http://localhost:8081"
     export STALWART_USER="admin"
     export STALWART_PASSWORD="$ADMIN_SECRET"
+    AUTH=$(printf 'admin:%s' "$ADMIN_SECRET" | base64 | tr -d '\n')
+    # Wait for the main Stalwart's admin HTTP endpoint to answer an authed request
+    # (/jmap/session returns 200 once fully up).
     up=0
-    for i in $(seq 1 60); do
-        if stalwart-cli query MtaOutboundStrategy >/dev/null 2>&1; then up=1; break; fi
+    for i in $(seq 1 90); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Basic $AUTH" \
+            "http://localhost:8081/jmap/session" 2>/dev/null || true)
+        if [ "$code" = "200" ]; then up=1; break; fi
         sleep 1
     done
-    if [ "$up" = "1" ]; then
-        /usr/local/bin/configure-relay.sh || echo "relay-config: setup failed (continuing)"
-        # Reconcile the Log tracer path to the persistent volume (was a separate
-        # post-start pass; do it here so it also survives into the main start).
+    if [ "$up" != "1" ]; then
+        echo "relay-config: admin API did not come up; skipping"
+    else
+        sleep 2  # let the object API/schema settle for stalwart-cli
+        # Reconcile the Log tracer path to the persistent volume (idempotent).
         LOG_ID=$(stalwart-cli query Tracer --no-color 2>/dev/null | awk '$2=="Log"{print $1; exit}')
         if [ -n "$LOG_ID" ]; then
             stalwart-cli update Tracer "$LOG_ID" --field "path=$DATA_DIR/logs" >/dev/null 2>&1 || true
         fi
-    else
-        echo "relay-config: pre-start admin API did not come up; skipping"
+        RELAY_RESTART_MARKER="$RESTART_MARKER" /usr/local/bin/configure-relay.sh \
+            || echo "relay-config: setup failed (continuing)"
+        if [ -f "$RESTART_MARKER" ]; then
+            rm -f "$RESTART_MARKER"
+            echo "relay-config: config changed; restarting Stalwart once to apply the route"
+            # Exit PID 1; podman (restart=unless-stopped) brings the container back,
+            # and the next boot finds the config already applied (no restart).
+            kill 1 2>/dev/null || true
+        fi
     fi
-    kill "$PRESTART_PID" 2>/dev/null || true
-    wait "$PRESTART_PID" 2>/dev/null || true
-    # Give the OS a moment to release the listener sockets (:8081, :25) the
-    # throwaway server held, so the main Stalwart below can bind them.
-    sleep 2
-    unset STALWART_URL STALWART_USER STALWART_PASSWORD
-)
+    unset STALWART_URL STALWART_USER STALWART_PASSWORD AUTH
+) &
 
 
 # Start the JMAP service proxy sidecar (gates /_jmap_service/* requests on
