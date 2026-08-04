@@ -26,3 +26,12 @@ host_port = 25
 service = "github.com/imbue-openhost/openhost-stalwart-email-server/services/jmap"
 version = "0.1.0"
 endpoint = "/_jmap_service/"
+
+# Outbound mail is relayed through the router's SMTP submission listener (the
+# OpenHost email service). The router attaches the per-instance relay credential
+# and forwards to the Imbue smarthost; this app never sees that credential.
+[[services.v2.consumes]]
+service = "github.com/imbue-openhost/openhost/services/email"
+shortname = "email"
+version = ">=0.1.0"
+grants = ["send"]
